@@ -1,33 +1,69 @@
 $ErrorActionPreference = "Stop"
 
-# Unity Editor 실행 파일 경로
-$unityPath = "C:\Program Files\Unity\Hub\Editor\2022.3.62f3\Editor\Unity.exe"
-
-# 현재 스크립트가 위치한 디렉터리
+# Unity Editor and project paths
+$unityPath = "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Unity.exe"
 $projectPath = $PSScriptRoot
-
-# 빌드 로그 저장 경로
 $logPath = Join-Path $projectPath "unity-build.log"
+$buildIndex = Join-Path $projectPath "Build\WebGL\index.html"
 
-# Unity Editor 실행 파일 확인
-if (-not (Test-Path $unityPath)) {
-    throw "Unity Editor를 찾을 수 없습니다: $unityPath"
+if (-not (Test-Path -LiteralPath $unityPath -PathType Leaf)) {
+    throw "Unity Editor not found: $unityPath"
 }
 
-# Unity CLI 실행
-& $unityPath `
-    -batchmode `
-    -quit `
-    -projectPath $projectPath `
-    -buildTarget WebGL `
-    -executeMethod BuildScript.BuildWebGL `
-    -logFile $logPath
+if (-not (Test-Path -LiteralPath (Join-Path $projectPath "Assets") -PathType Container)) {
+    throw "Unity project Assets folder not found: $projectPath"
+}
 
-# 종료 코드 확인
-$exitCode = $LASTEXITCODE
+# Remove the previous entry point to avoid treating stale output as success.
+if (Test-Path -LiteralPath $buildIndex) {
+    Remove-Item -LiteralPath $buildIndex -Force
+}
+
+$unityArgs = @(
+    '-batchmode'
+    '-nographics'
+    '-quit'
+    '-projectPath', ('"' + $projectPath + '"')
+    '-buildTarget', 'WebGL'
+    '-executeMethod', 'BuildScript.BuildWebGL'
+    '-logFile', ('"' + $logPath + '"')
+)
+
+Write-Host "Starting Unity WebGL build..."
+Write-Host "Project: $projectPath"
+Write-Host "Log: $logPath"
+
+$timer = [System.Diagnostics.Stopwatch]::StartNew()
+try {
+    $process = Start-Process -FilePath $unityPath -ArgumentList $unityArgs -Wait -PassThru
+}
+catch {
+    Write-Host "Failed to launch Unity: $($_.Exception.Message)"
+    throw
+}
+finally {
+    $timer.Stop()
+}
+
+$exitCode = $process.ExitCode
+Write-Host "Unity exit code: $exitCode"
+Write-Host "Elapsed: $($timer.Elapsed.ToString('hh\:mm\:ss'))"
 
 if ($exitCode -ne 0) {
-    throw "Unity WebGL 빌드 실패 (Exit Code: $exitCode)"
+    if (Test-Path -LiteralPath $logPath) {
+        Write-Host "===== Unity build log (last 80 lines) ====="
+        Get-Content -LiteralPath $logPath -Tail 80
+    }
+    throw "Unity WebGL build failed (exit code: $exitCode)"
 }
 
-Write-Host "Unity WebGL 빌드 완료"
+if (-not (Test-Path -LiteralPath $buildIndex -PathType Leaf)) {
+    if (Test-Path -LiteralPath $logPath) {
+        Write-Host "===== Unity build log (last 80 lines) ====="
+        Get-Content -LiteralPath $logPath -Tail 80
+    }
+    throw "Build completed but index.html was not found: $buildIndex. Check BuildScript.BuildWebGL output path."
+}
+
+Write-Host "Unity WebGL build completed successfully."
+Write-Host "Output: $buildIndex"
